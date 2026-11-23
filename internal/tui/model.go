@@ -21,6 +21,7 @@ type Model struct {
 	input         textarea.Model
 	viewport      viewport.Model
 	messages      []message
+	streamCh      chan tea.Msg
 }
 
 func New(client *llm.Client, modelName string) Model {
@@ -64,12 +65,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
-	case replyMsg:
+	case streamDeltaMsg:
+		if n := len(m.messages); n > 0 {
+			m.messages[n-1].content += msg.text
+		}
+		m.refresh()
+		return m, waitForStream(m.streamCh)
+	case streamDoneMsg:
 		m.waiting = false
+		m.streamCh = nil
 		if msg.err != nil {
+			if n := len(m.messages); n > 0 && m.messages[n-1].role == roleAssistant && m.messages[n-1].content == "" {
+				m.messages = m.messages[:n-1]
+			}
 			m.addSystem("Error: " + msg.err.Error())
-		} else {
-			m.messages = append(m.messages, message{roleAssistant, msg.text})
 		}
 		return m, nil
 	}
@@ -106,10 +115,14 @@ func (m *Model) submit() tea.Cmd {
 	}
 
 	m.messages = append(m.messages, message{roleUser, text})
+	history := toLLM(m.messages)
+	m.messages = append(m.messages, message{roleAssistant, ""})
 	m.waiting = true
+	m.streamCh = make(chan tea.Msg, 64)
 	m.refresh()
 
-	return chatCmd(m.client, m.model, toLLM(m.messages))
+	go streamInto(m.client, m.model, history, m.streamCh)
+	return waitForStream(m.streamCh)
 }
 
 func (m Model) View() tea.View {

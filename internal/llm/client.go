@@ -1,10 +1,10 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,11 +22,14 @@ type Message struct {
 type chatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream,omitempty"`
 }
 
-type chatResponse struct {
+type streamChunk struct {
 	Choices []struct {
-		Message Message `json:"message"`
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
@@ -64,50 +67,79 @@ func NewClient(apiKey, baseURL string) *Client {
 	}
 }
 
-func (c *Client) Chat(ctx context.Context, model string, msgs []Message) (string, error) {
-	body, err := json.Marshal(chatRequest{Model: model, Messages: msgs})
+// ChatStream sends msgs to the model and invokes onDelta for every content
+// token as it arrives from the server-sent event stream.
+func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, onDelta func(string)) error {
+	body, err := json.Marshal(chatRequest{Model: model, Messages: msgs, Stream: true})
 	if err != nil {
-		return "", fmt.Errorf("encode request: %w", err)
+		return fmt.Errorf("encode request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	var out chatResponse
-	jsonErr := json.Unmarshal(data, &out)
-
 	if resp.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(data))
+		return readAPIError(resp)
+	}
+	return readStream(resp.Body, onDelta)
+}
 
-		if jsonErr == nil && out.Error != nil {
-			msg = out.Error.Message
+func readAPIError(resp *http.Response) error {
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	msg := strings.TrimSpace(string(data))
+
+	var payload struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &payload) == nil && payload.Error != nil {
+		msg = payload.Error.Message
+	}
+	return &APIError{Status: resp.StatusCode, Message: msg}
+}
+
+func readStream(r io.Reader, onDelta func(string)) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
 		}
-		return "", &APIError{Status: resp.StatusCode, Message: msg}
-	}
-	if jsonErr != nil {
-		return "", fmt.Errorf("decode response: %w", jsonErr)
-	}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		switch {
+		case data == "":
+			continue
+		case data == "[DONE]":
+			return nil
+		}
 
-	if out.Error != nil {
-		return "", &APIError{Status: resp.StatusCode, Message: out.Error.Message}
+		var chunk streamChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Error != nil {
+			return &APIError{Status: http.StatusOK, Message: chunk.Error.Message}
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		if delta := chunk.Choices[0].Delta.Content; delta != "" {
+			onDelta(delta)
+		}
 	}
-	if len(out.Choices) == 0 {
-		return "", errors.New("openrouter: response contained no choice")
-	}
-	return out.Choices[0].Message.Content, nil
+	return sc.Err()
 }
