@@ -18,6 +18,7 @@ type Model struct {
 	ready         bool
 	waiting       bool
 	model         string
+	reasoning     bool
 	client        *llm.Client
 	registry      *tools.Registry
 	history       []llm.Message
@@ -30,7 +31,7 @@ type Model struct {
 	approvalText  string
 }
 
-func New(client *llm.Client, modelName string, reg *tools.Registry) Model {
+func New(client *llm.Client, modelName string, reg *tools.Registry, reasoning bool) Model {
 	ta := textarea.New()
 	ta.Placeholder = "What should we cook?"
 	ta.ShowLineNumbers = false
@@ -39,11 +40,12 @@ func New(client *llm.Client, modelName string, reg *tools.Registry) Model {
 	ta.Focus()
 
 	return Model{
-		client:   client,
-		model:    modelName,
-		registry: reg,
-		input:    ta,
-		viewport: viewport.New(),
+		client:    client,
+		model:     modelName,
+		reasoning: reasoning,
+		registry:  reg,
+		input:     ta,
+		viewport:  viewport.New(),
 		messages: []message{
 			{roleSystem, "Connected via OpenRouter. Type a message or /help."}},
 		history: []llm.Message{{Role: "system", Content: systemPrompt}},
@@ -89,8 +91,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case streamDeltaMsg:
-		if n := len(m.messages); n == 0 || m.messages[n-1].role != roleAssistant {
-			m.messages = append(m.messages, message{roleAssistant, ""})
+		wantRole := roleAssistant
+		if msg.reasoning {
+			wantRole = roleReasoning
+		}
+		if n := len(m.messages); n == 0 || m.messages[n-1].role != wantRole {
+			m.messages = append(m.messages, message{wantRole, ""})
 		}
 		m.messages[len(m.messages)-1].content += msg.text
 		m.refresh()
@@ -158,7 +164,7 @@ func (m *Model) submit() tea.Cmd {
 	m.streamCh = make(chan tea.Msg, 64)
 	m.refresh()
 
-	go runAgent(m.client, m.model, m.registry, m.history, m.streamCh)
+	go runAgent(m.client, m.model, m.registry, m.reasoning, m.history, m.streamCh)
 	return waitForStream(m.streamCh)
 }
 

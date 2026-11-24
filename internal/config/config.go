@@ -2,19 +2,22 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	APIKey string
-	Model  string
+	APIKey    string
+	Model     string
+	Reasoning bool
 }
 
 func Load() (Config, error) {
-	// .env is optional. Real environemnts takes priority over it.
+	// .env is optional. Real environments take priority over it.
 	_ = godotenv.Load()
 
 	key := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
@@ -25,7 +28,16 @@ func Load() (Config, error) {
 	model := strings.TrimSpace(os.Getenv("GODEX_MODEL"))
 	if model == "" {
 		model = "openrouter/free"
-		// return Config{}, errors.New("GODEX_MODEL is not set")
 	}
-	return Config{APIKey: key, Model: model}, nil
+
+	reasoning := true
+	if v := strings.TrimSpace(os.Getenv("GODEX_REASONING")); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("GODEX_REASONING must be a boolean: %w", err)
+		}
+		reasoning = parsed
+	}
+
+	return Config{APIKey: key, Model: model, Reasoning: reasoning}, nil
 }

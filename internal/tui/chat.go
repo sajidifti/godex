@@ -23,7 +23,10 @@ Use list_dir and read_file to explore, write_file to create or overwrite files, 
 The user is asked to approve write_file and run_shell, so only use them when needed.
 Keep replies concise.`
 
-type streamDeltaMsg struct{ text string }
+type streamDeltaMsg struct {
+	text      string
+	reasoning bool
+}
 type toolCallMsg struct {
 	name string
 	args string
@@ -60,15 +63,20 @@ func toolDefs(reg *tools.Registry) []llm.ToolDef {
 }
 
 // runAgent drives the model <-> tool loop until the model stops asking for tools.
-func runAgent(c *llm.Client, model string, reg *tools.Registry, history []llm.Message, ch chan<- tea.Msg) {
+func runAgent(c *llm.Client, model string, reg *tools.Registry, reasoning bool, history []llm.Message, ch chan<- tea.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
 
 	defs := toolDefs(reg)
 
 	for step := 0; step < maxSteps; step++ {
-		resp, err := c.ChatStream(ctx, model, history, defs, func(delta string) {
-			ch <- streamDeltaMsg{text: delta}
+		resp, err := c.ChatStream(ctx, model, history, defs, reasoning, func(d llm.Delta) {
+			if d.Reasoning != "" {
+				ch <- streamDeltaMsg{text: d.Reasoning, reasoning: true}
+			}
+			if d.Content != "" {
+				ch <- streamDeltaMsg{text: d.Content}
+			}
 		})
 		if err != nil {
 			ch <- agentDoneMsg{history: history, err: err}

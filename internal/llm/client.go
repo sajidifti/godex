@@ -43,28 +43,77 @@ type ToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
+// ReasoningConfig turns on the model's reasoning ("thinking") tokens.
+type ReasoningConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// Delta is one piece of a streamed response. A single chunk can carry content,
+// reasoning, or both.
+type Delta struct {
+	Content   string
+	Reasoning string
+}
+
 type Response struct {
 	Content   string
+	Reasoning string
 	ToolCalls []ToolCall
 }
 
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Tools    []ToolDef `json:"tools,omitempty"`
-	Stream   bool      `json:"stream,omitempty"`
+	Model     string           `json:"model"`
+	Messages  []Message        `json:"messages"`
+	Tools     []ToolDef        `json:"tools,omitempty"`
+	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
+	Stream    bool             `json:"stream,omitempty"`
 }
 
 type streamChunk struct {
 	Choices []struct {
-		Delta struct {
-			Content   string          `json:"content"`
-			ToolCalls []toolCallDelta `json:"tool_calls"`
-		} `json:"delta"`
+		Delta streamDelta `json:"delta"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type streamDelta struct {
+	Content          string            `json:"content"`
+	Reasoning        string            `json:"reasoning"`
+	ReasoningDetails []reasoningDetail `json:"reasoning_details"`
+	ToolCalls        []toolCallDelta   `json:"tool_calls"`
+}
+
+// reasoningText prefers the plain reasoning string and falls back to the
+// structured reasoning_details array (OpenRouter sends one or the other).
+func (d streamDelta) reasoningText() string {
+	if d.Reasoning != "" {
+		return d.Reasoning
+	}
+	var b strings.Builder
+	for _, rd := range d.ReasoningDetails {
+		b.WriteString(rd.content())
+	}
+	return b.String()
+}
+
+// reasoningDetail is the structured form of a reasoning chunk, either raw
+// ("reasoning.text") or condensed ("reasoning.summary").
+type reasoningDetail struct {
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
+}
+
+func (d reasoningDetail) content() string {
+	switch d.Type {
+	case "reasoning.text":
+		return d.Text
+	case "reasoning.summary":
+		return d.Summary
+	}
+	return ""
 }
 
 type toolCallDelta struct {
@@ -108,23 +157,28 @@ func NewClient(apiKey, baseURL string) *Client {
 	}
 }
 
-// ChatStream sends msgs to the model and invokes onDelta for every content
-// token as it arrives from the server-sent event stream.
-func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, tools []ToolDef, onDelta func(string)) (Response, error) {
-	body, err := json.Marshal(chatRequest{Model: model, Messages: msgs, Tools: tools, Stream: true})
+// ChatStream sends msgs to the model and invokes onDelta for every content or
+// reasoning token as it arrives from the server-sent event stream.
+func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, tools []ToolDef, reasoning bool, onDelta func(Delta)) (Response, error) {
+	req := chatRequest{Model: model, Messages: msgs, Tools: tools, Stream: true}
+	if reasoning {
+		req.Reasoning = &ReasoningConfig{Enabled: true}
+	}
+
+	body, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, fmt.Errorf("encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return Response{}, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := c.http.Do(req)
+	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return Response{}, fmt.Errorf("send request: %w", err)
 	}
@@ -151,12 +205,12 @@ func readAPIError(resp *http.Response) error {
 	return &APIError{Status: resp.StatusCode, Message: msg}
 }
 
-func readStream(r io.Reader, onDelta func(string)) (Response, error) {
+func readStream(r io.Reader, onDelta func(Delta)) (Response, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 
 	var resp Response
-	var content strings.Builder
+	var content, reasoning strings.Builder
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -169,6 +223,7 @@ func readStream(r io.Reader, onDelta func(string)) (Response, error) {
 			continue
 		case data == "[DONE]":
 			resp.Content = content.String()
+			resp.Reasoning = reasoning.String()
 			return resp, nil
 		}
 
@@ -184,15 +239,21 @@ func readStream(r io.Reader, onDelta func(string)) (Response, error) {
 		}
 
 		delta := chunk.Choices[0].Delta
+
+		if text := delta.reasoningText(); text != "" {
+			reasoning.WriteString(text)
+			onDelta(Delta{Reasoning: text})
+		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
-			onDelta(delta.Content)
+			onDelta(Delta{Content: delta.Content})
 		}
 		for _, tc := range delta.ToolCalls {
 			appendToolCall(&resp.ToolCalls, tc)
 		}
 	}
 	resp.Content = content.String()
+	resp.Reasoning = reasoning.String()
 	return resp, sc.Err()
 }
 

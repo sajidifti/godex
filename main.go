@@ -20,7 +20,7 @@ func main() {
 	wd, _ := os.Getwd()
 	reg := tools.Default(wd)
 
-	p := tea.NewProgram(tui.New(client, cfg.Model, reg))
+	p := tea.NewProgram(tui.New(client, cfg.Model, reg, cfg.Reasoning))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
