@@ -52,8 +52,8 @@ func TestChatStreamSuccess(t *testing.T) {
 
 	c := NewClient("test-key", srv.URL)
 	var got strings.Builder
-	err := c.ChatStream(context.Background(), "some/model",
-		[]Message{{Role: "user", Content: "hi"}},
+	_, err := c.ChatStream(context.Background(), "some/model",
+		[]Message{{Role: "user", Content: "hi"}}, nil,
 		func(delta string) { got.WriteString(delta) })
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -71,7 +71,7 @@ func TestChatStreamAPIError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient("k", srv.URL)
-	err := c.ChatStream(context.Background(), "m", nil, func(string) {})
+	_, err := c.ChatStream(context.Background(), "m", nil, nil, func(string) {})
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -90,7 +90,7 @@ func TestChatStreamMidStreamError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient("k", srv.URL)
-	err := c.ChatStream(context.Background(), "m", nil, func(string) {})
+	_, err := c.ChatStream(context.Background(), "m", nil, nil, func(string) {})
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -98,5 +98,28 @@ func TestChatStreamMidStreamError(t *testing.T) {
 	}
 	if apiErr.Message != "provider melted" {
 		t.Errorf("message = %q, want %q", apiErr.Message, "provider melted")
+	}
+}
+
+func TestChatStreamToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":""}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\""}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"main.go\"}"}}]}}]}`+"\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", srv.URL)
+	resp, err := c.ChatStream(context.Background(), "m", nil, nil, func(string) {})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("got %d tool calls, want 1", len(resp.ToolCalls))
+	}
+	if tc := resp.ToolCalls[0]; tc.Function.Name != "read_file" || tc.Function.Arguments != `{"path":"main.go"}` {
+		t.Errorf("call = %+v, want read_file {\"path\":\"main.go\"}", tc)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/sajidifti/godex/internal/llm"
+	"github.com/sajidifti/godex/internal/tools"
 )
 
 const inputHeight = 3
@@ -18,13 +19,15 @@ type Model struct {
 	waiting       bool
 	model         string
 	client        *llm.Client
+	registry      *tools.Registry
+	history       []llm.Message
 	input         textarea.Model
 	viewport      viewport.Model
 	messages      []message
 	streamCh      chan tea.Msg
 }
 
-func New(client *llm.Client, modelName string) Model {
+func New(client *llm.Client, modelName string, reg *tools.Registry) Model {
 	ta := textarea.New()
 	ta.Placeholder = "What should we cook?"
 	ta.ShowLineNumbers = false
@@ -35,10 +38,12 @@ func New(client *llm.Client, modelName string) Model {
 	return Model{
 		client:   client,
 		model:    modelName,
+		registry: reg,
 		input:    ta,
 		viewport: viewport.New(),
 		messages: []message{
 			{roleSystem, "Connected via OpenRouter. Type a message or /help."}},
+		history: []llm.Message{{Role: "system", Content: systemPrompt}},
 	}
 }
 
@@ -66,18 +71,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case streamDeltaMsg:
-		if n := len(m.messages); n > 0 {
-			m.messages[n-1].content += msg.text
+		if n := len(m.messages); n == 0 || m.messages[n-1].role != roleAssistant {
+			m.messages = append(m.messages, message{roleAssistant, ""})
 		}
+		m.messages[len(m.messages)-1].content += msg.text
 		m.refresh()
 		return m, waitForStream(m.streamCh)
-	case streamDoneMsg:
+	case toolCallMsg:
+		m.messages = append(m.messages, message{roleTool, "→ " + msg.name + "(" + truncate(msg.args, 80) + ")"})
+		m.refresh()
+		return m, waitForStream(m.streamCh)
+	case toolResultMsg:
+		m.messages = append(m.messages, message{roleTool, "↳ " + truncate(msg.output, 300)})
+		m.refresh()
+		return m, waitForStream(m.streamCh)
+	case agentDoneMsg:
 		m.waiting = false
 		m.streamCh = nil
+		m.history = msg.history
+		if n := len(m.messages); n > 0 && m.messages[n-1].role == roleAssistant && m.messages[n-1].content == "" {
+			m.messages = m.messages[:n-1]
+		}
 		if msg.err != nil {
-			if n := len(m.messages); n > 0 && m.messages[n-1].role == roleAssistant && m.messages[n-1].content == "" {
-				m.messages = m.messages[:n-1]
-			}
 			m.addSystem("Error: " + msg.err.Error())
 		}
 		return m, nil
@@ -115,13 +130,12 @@ func (m *Model) submit() tea.Cmd {
 	}
 
 	m.messages = append(m.messages, message{roleUser, text})
-	history := toLLM(m.messages)
-	m.messages = append(m.messages, message{roleAssistant, ""})
+	m.history = append(m.history, llm.Message{Role: "user", Content: text})
 	m.waiting = true
 	m.streamCh = make(chan tea.Msg, 64)
 	m.refresh()
 
-	go streamInto(m.client, m.model, history, m.streamCh)
+	go runAgent(m.client, m.model, m.registry, m.history, m.streamCh)
 	return waitForStream(m.streamCh)
 }
 

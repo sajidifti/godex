@@ -12,6 +12,7 @@ const (
 	roleUser      role = "user"
 	roleAssistant role = "assistant"
 	roleSystem    role = "system"
+	roleTool      role = "tool"
 )
 
 type message struct {
@@ -33,6 +34,12 @@ func renderMessage(msgs []message, width int) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
+
+		if msg.role == roleTool {
+			b.WriteString(dim.Width(width).Render(msg.content))
+			continue
+		}
+
 		var label string
 		style := body
 
