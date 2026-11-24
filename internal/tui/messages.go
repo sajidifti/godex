@@ -27,6 +27,7 @@ var (
 	dim          = lipgloss.NewStyle().Foreground(lipgloss.Color("#9aa9c4"))
 	warn         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffcc66"))
 	thoughtLabel = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("#8a8fa3"))
+	reasonOn     = lipgloss.NewStyle().Foreground(lipgloss.Color("#8be0b1"))
 )
 
 func renderMessage(msgs []message, width int) string {

@@ -168,13 +168,20 @@ func (m *Model) submit() tea.Cmd {
 	return waitForStream(m.streamCh)
 }
 
+func (m Model) reasoningTag() string {
+	if m.reasoning {
+		return reasonOn.Render("reasoning:on")
+	}
+	return dim.Render("reasoning:off")
+}
+
 func (m Model) View() tea.View {
 	content := "starting...."
 	if m.ready {
 		sep := dim.Render(strings.Repeat("-", m.width))
-		status := dim.Render(m.model + " . Enter send . PgUp/PgDown scroll . Ctrl+C quit")
+		status := dim.Render(m.model+" . ") + m.reasoningTag() + dim.Render(" . Enter send . PgUp/PgDown scroll . Ctrl+C quit")
 		if m.waiting {
-			status = dim.Render(m.model + " . thinking...")
+			status = dim.Render(m.model+" . ") + m.reasoningTag() + dim.Render(" . thinking...")
 		}
 		if m.approving {
 			status = warn.Render("approve " + m.approvalText + " ?  [y/n]")
