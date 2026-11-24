@@ -24,6 +24,7 @@ var (
 	userLabel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#83b7ff"))
 	botLabel  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#8be0b1"))
 	dim       = lipgloss.NewStyle().Foreground(lipgloss.Color("#9aa9c4"))
+	warn      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffcc66"))
 )
 
 func renderMessage(msgs []message, width int) string {

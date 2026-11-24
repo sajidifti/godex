@@ -11,8 +11,10 @@ import (
 // Compile-time proof that our types satisfy the Tool interface. If a method
 // signature ever drifts, the build fails right here.
 var (
-	_ Tool = (*ListDir)(nil)
-	_ Tool = (*ReadFile)(nil)
+	_ Tool    = (*ListDir)(nil)
+	_ Tool    = (*ReadFile)(nil)
+	_ Tool    = (*WriteFile)(nil)
+	_ Guarded = (*WriteFile)(nil)
 )
 
 func TestReadFile(t *testing.T) {
@@ -42,5 +44,24 @@ func TestListDir(t *testing.T) {
 	}
 	if got != "sub/" {
 		t.Errorf("got %q, want %q", got, "sub/")
+	}
+}
+
+func TestWriteFile(t *testing.T) {
+	dir := t.TempDir()
+	out, err := NewWriteFile(dir).Run(context.Background(), json.RawMessage(`{"path":"sub/a.txt","content":"hi"}`))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if out == "" {
+		t.Error("expected a status message")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "sub", "a.txt"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(data) != "hi" {
+		t.Errorf("got %q, want %q", data, "hi")
 	}
 }

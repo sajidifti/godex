@@ -18,8 +18,10 @@ const (
 )
 
 const systemPrompt = `You are godex, a coding assistant running in the user's terminal.
-You can inspect their project with tools. Prefer calling a tool over guessing.
-Use list_dir and read_file to explore before answering. Keep replies concise.`
+You can inspect and change the project using tools. Prefer calling a tool over guessing.
+Use list_dir and read_file to explore, write_file to create or overwrite files, and run_shell to run commands.
+The user is asked to approve write_file and run_shell, so only use them when needed.
+Keep replies concise.`
 
 type streamDeltaMsg struct{ text string }
 type toolCallMsg struct {
@@ -29,6 +31,11 @@ type toolCallMsg struct {
 type toolResultMsg struct {
 	name   string
 	output string
+}
+type approvalRequestMsg struct {
+	name  string
+	args  string
+	reply chan bool
 }
 type agentDoneMsg struct {
 	history []llm.Message
@@ -82,7 +89,7 @@ func runAgent(c *llm.Client, model string, reg *tools.Registry, history []llm.Me
 		for _, tc := range resp.ToolCalls {
 			ch <- toolCallMsg{name: tc.Function.Name, args: tc.Function.Arguments}
 
-			result := runTool(ctx, reg, tc)
+			result := runTool(ctx, reg, tc, ch)
 
 			ch <- toolResultMsg{name: tc.Function.Name, output: result}
 			history = append(history, llm.Message{
@@ -96,11 +103,19 @@ func runAgent(c *llm.Client, model string, reg *tools.Registry, history []llm.Me
 	ch <- agentDoneMsg{history: history, err: errors.New("stopped after too many tool steps")}
 }
 
-// runTool executes one tool call, turning any failure into text the model can read.
-func runTool(ctx context.Context, reg *tools.Registry, tc llm.ToolCall) string {
+// runTool executes one tool call, pausing for user approval when a tool asks for
+// it. Any failure becomes text the model can read and react to.
+func runTool(ctx context.Context, reg *tools.Registry, tc llm.ToolCall, ch chan<- tea.Msg) string {
 	t, ok := reg.Get(tc.Function.Name)
 	if !ok {
 		return fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+	}
+	if g, ok := t.(tools.Guarded); ok && g.NeedsApproval() {
+		reply := make(chan bool, 1)
+		ch <- approvalRequestMsg{name: tc.Function.Name, args: tc.Function.Arguments, reply: reply}
+		if !<-reply {
+			return "error: user denied permission to run " + tc.Function.Name
+		}
 	}
 	out, err := t.Run(ctx, json.RawMessage(tc.Function.Arguments))
 	if err != nil {

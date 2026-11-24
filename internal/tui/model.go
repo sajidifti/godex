@@ -25,6 +25,9 @@ type Model struct {
 	viewport      viewport.Model
 	messages      []message
 	streamCh      chan tea.Msg
+	approving     bool
+	approvalCh    chan bool
+	approvalText  string
 }
 
 func New(client *llm.Client, modelName string, reg *tools.Registry) Model {
@@ -59,6 +62,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
+		if m.approving {
+			switch msg.String() {
+			case "y", "Y":
+				m.approving = false
+				m.approvalCh <- true
+				m.approvalCh = nil
+			case "n", "N", "esc":
+				m.approving = false
+				m.approvalCh <- false
+				m.approvalCh = nil
+			case "ctrl+c":
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -84,6 +102,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolResultMsg:
 		m.messages = append(m.messages, message{roleTool, "↳ " + truncate(msg.output, 300)})
 		m.refresh()
+		return m, waitForStream(m.streamCh)
+	case approvalRequestMsg:
+		m.approving = true
+		m.approvalCh = msg.reply
+		m.approvalText = msg.name + "(" + truncate(msg.args, 120) + ")"
 		return m, waitForStream(m.streamCh)
 	case agentDoneMsg:
 		m.waiting = false
@@ -143,9 +166,12 @@ func (m Model) View() tea.View {
 	content := "starting...."
 	if m.ready {
 		sep := dim.Render(strings.Repeat("-", m.width))
-		status := dim.Render(m.model + "Enter send . PgUp/PgDown scroll . Ctrl+C quit")
+		status := dim.Render(m.model + " . Enter send . PgUp/PgDown scroll . Ctrl+C quit")
 		if m.waiting {
 			status = dim.Render(m.model + " . thinking...")
+		}
+		if m.approving {
+			status = warn.Render("approve " + m.approvalText + " ?  [y/n]")
 		}
 		content = lipgloss.JoinVertical(
 			lipgloss.Left,

@@ -108,10 +108,57 @@ func (t *ReadFile) Run(_ context.Context, args json.RawMessage) (string, error) 
 	return string(data), nil
 }
 
-// Default builds the registry with every built-in read-only tool.
+type WriteFile struct{ base string }
+
+func NewWriteFile(base string) *WriteFile { return &WriteFile{base: base} }
+
+func (*WriteFile) Name() string { return "write_file" }
+
+func (*WriteFile) Description() string {
+	return "Create or overwrite a file with the given content."
+}
+
+func (*WriteFile) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"path": {"type": "string", "description": "File path relative to the working directory."},
+			"content": {"type": "string", "description": "Full file content to write."}
+		},
+		"required": ["path", "content"]
+	}`)
+}
+
+func (*WriteFile) NeedsApproval() bool { return true }
+
+func (t *WriteFile) Run(_ context.Context, args json.RawMessage) (string, error) {
+	var a struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if a.Path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
+	full := filepath.Join(t.base, a.Path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(full, []byte(a.Content), 0o644); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path), nil
+}
+
+// Default builds the registry with every built-in tool.
 func Default(base string) *Registry {
 	return NewRegistry(
 		NewListDir(base),
 		NewReadFile(base),
+		NewWriteFile(base),
+		NewRunShell(base),
 	)
 }
