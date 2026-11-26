@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// Compile-time proof that our types satisfy the Tool interface. If a method
-// signature ever drifts, the build fails right here.
 var (
 	_ Tool    = (*ListDir)(nil)
 	_ Tool    = (*ReadFile)(nil)

@@ -43,13 +43,10 @@ type ToolCallFunc struct {
 	Arguments string `json:"arguments"`
 }
 
-// ReasoningConfig turns on the model's reasoning ("thinking") tokens.
 type ReasoningConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
-// Delta is one piece of a streamed response. A single chunk can carry content,
-// reasoning, or both.
 type Delta struct {
 	Content   string
 	Reasoning string
@@ -85,8 +82,6 @@ type streamDelta struct {
 	ToolCalls        []toolCallDelta   `json:"tool_calls"`
 }
 
-// reasoningText prefers the plain reasoning string and falls back to the
-// structured reasoning_details array (OpenRouter sends one or the other).
 func (d streamDelta) reasoningText() string {
 	if d.Reasoning != "" {
 		return d.Reasoning
@@ -98,8 +93,6 @@ func (d streamDelta) reasoningText() string {
 	return b.String()
 }
 
-// reasoningDetail is the structured form of a reasoning chunk, either raw
-// ("reasoning.text") or condensed ("reasoning.summary").
 type reasoningDetail struct {
 	Type    string `json:"type"`
 	Text    string `json:"text"`
@@ -157,8 +150,6 @@ func NewClient(apiKey, baseURL string) *Client {
 	}
 }
 
-// ChatStream sends msgs to the model and invokes onDelta for every content or
-// reasoning token as it arrives from the server-sent event stream.
 func (c *Client) ChatStream(ctx context.Context, model string, msgs []Message, tools []ToolDef, reasoning bool, onDelta func(Delta)) (Response, error) {
 	req := chatRequest{Model: model, Messages: msgs, Tools: tools, Stream: true}
 	if reasoning {

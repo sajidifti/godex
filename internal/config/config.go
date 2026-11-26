@@ -17,7 +17,6 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	// .env is optional. Real environments take priority over it.
 	_ = godotenv.Load()
 
 	key := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))

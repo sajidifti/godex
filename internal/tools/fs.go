@@ -153,7 +153,6 @@ func (t *WriteFile) Run(_ context.Context, args json.RawMessage) (string, error)
 	return fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path), nil
 }
 
-// Default builds the registry with every built-in tool.
 func Default(base string) *Registry {
 	return NewRegistry(
 		NewListDir(base),

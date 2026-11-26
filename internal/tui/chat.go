@@ -44,7 +44,6 @@ type agentDoneMsg struct {
 	err     error
 }
 
-// toolDefs converts our Tool interface into the wire format the model expects.
 func toolDefs(reg *tools.Registry) []llm.ToolDef {
 	all := reg.All()
 	defs := make([]llm.ToolDef, 0, len(all))
@@ -61,7 +60,6 @@ func toolDefs(reg *tools.Registry) []llm.ToolDef {
 	return defs
 }
 
-// runAgent drives the model <-> tool loop until the model stops asking for tools.
 func runAgent(c *llm.Client, model string, reg *tools.Registry, reasoning bool, history []llm.Message, ch chan<- tea.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentTimeout)
 	defer cancel()
@@ -110,8 +108,6 @@ func runAgent(c *llm.Client, model string, reg *tools.Registry, reasoning bool, 
 	ch <- agentDoneMsg{history: history, err: errors.New("stopped after too many tool steps")}
 }
 
-// runTool executes one tool call, pausing for user approval when a tool asks for
-// it. Any failure becomes text the model can read and react to.
 func runTool(ctx context.Context, reg *tools.Registry, tc llm.ToolCall, ch chan<- tea.Msg) string {
 	t, ok := reg.Get(tc.Function.Name)
 	if !ok {
@@ -131,7 +127,6 @@ func runTool(ctx context.Context, reg *tools.Registry, tc llm.ToolCall, ch chan<
 	return out
 }
 
-// waitForStream receives the next event from the agent channel.
 func waitForStream(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-ch }
 }

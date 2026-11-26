@@ -12,8 +12,6 @@ type Tool interface {
 	Run(ctx context.Context, args json.RawMessage) (string, error)
 }
 
-// Guarded marks a tool that must be confirmed by the user before it runs.
-// Tools opt in by implementing this; the harness checks with a type assertion.
 type Guarded interface {
 	NeedsApproval() bool
 }
